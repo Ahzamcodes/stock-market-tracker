@@ -1,13 +1,7 @@
 # Dependencies
 node_modules/
-/.pnp
-.pnp.js
-
-# Production
-/build
-/dist
-/out
-*.tsbuildinfo
+.npm
+.yarn
 
 # Environment variables
 .env
@@ -15,6 +9,11 @@ node_modules/
 .env.development.local
 .env.test.local
 .env.production.local
+
+# Build files
+build/
+dist/
+coverage/
 
 # Logs
 logs
@@ -32,6 +31,12 @@ yarn-error.log*
 *.sln
 *.sw?
 
-# Operating System Files
+# OS
 .DS_Store
-Thumbs.db 
+Thumbs.db
+
+# Debug
+.debugger/
+
+# TypeScript cache
+*.tsbuildinfo 

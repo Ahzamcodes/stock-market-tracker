@@ -1,6 +1,90 @@
 # Stock Market Price Tracker
 
-A real-time stock market tracking application that allows users to monitor stock prices and changes.
+A real-time stock market price tracking application built with React, Node.js, Express, and WebSockets.
+
+## Features
+
+- **Real-time Stock Data**: Get instant updates on stock prices via WebSockets
+- **Watchlist Functionality**: Save your favorite stocks to track
+- **Mock Data Fallback**: Continue using the app even when API limits are reached
+- **Responsive Design**: Works on desktop and mobile devices
+- **In-Memory Storage**: No database configuration required for testing
+
+## Tech Stack
+
+- **Frontend**: React with TypeScript
+- **Backend**: Node.js, Express
+- **Real-time Communication**: WebSockets (ws library)
+- **API Integration**: Alpha Vantage Stock API
+- **Storage Options**: In-memory storage with MySQL fallback
+
+## Setup and Installation
+
+### Backend Setup
+
+1. Navigate to the server directory:
+   ```
+   cd server
+   ```
+
+2. Install dependencies:
+   ```
+   npm install
+   ```
+
+3. Create a `.env` file with the following contents:
+   ```
+   PORT=3001
+   WS_PORT=8891
+   ALPHA_VANTAGE_API_KEY=your_api_key
+   USE_IN_MEMORY=true
+   DB_HOST=localhost
+   DB_USER=root
+   DB_PASSWORD=
+   DB_NAME=stock_tracker
+   ```
+
+4. Start the server:
+   ```
+   npm run dev
+   ```
+
+### Frontend Setup
+
+1. Navigate to the client directory:
+   ```
+   cd client
+   ```
+
+2. Install dependencies:
+   ```
+   npm install
+   ```
+
+3. Start the client:
+   ```
+   npm start
+   ```
+
+## Usage
+
+1. Open your browser and go to `http://localhost:3000`
+2. Enter a stock symbol (e.g., AAPL, MSFT, GOOGL) in the input field
+3. Click "Track Stock" to add it to your watchlist
+4. Watch real-time price updates for your tracked stocks
+5. Remove stocks from your watchlist by clicking the "X" button
+
+## API Limits
+
+The application uses the Alpha Vantage API which has a limit of 25 requests per day on the free tier. Once this limit is reached, the application automatically switches to mock data to ensure continuous functionality.
+
+## Future Enhancements
+
+- User authentication
+- Historical data charts
+- Portfolio tracking
+- Price alerts
+- Social sharing features
 
 ## Developed By
 Ahzam Khan  
