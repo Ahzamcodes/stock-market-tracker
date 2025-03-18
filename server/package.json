@@ -5,7 +5,7 @@
   "main": "src/index.ts",
   "scripts": {
     "start": "ts-node src/index.ts",
-    "dev": "nodemon src/index.ts",
+    "dev": "nodemon src/fixed-index.ts",
     "build": "tsc",
     "test": "jest"
   },

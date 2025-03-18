@@ -1,111 +1,95 @@
 import express, { Request, Response } from 'express';
 import cors from 'cors';
-import { WebSocket, WebSocketServer } from 'ws';
-import { createConnection } from 'mysql2/promise';
 import dotenv from 'dotenv';
+import { WebSocketServer, WebSocket } from 'ws';
 import axios from 'axios';
-import { initDatabase, storeHistoricalData, getHistoricalData, addToWatchlist, removeFromWatchlist, getUserWatchlist } from './database';
+import { initDatabase, getUserWatchlist, addToWatchlist, removeFromWatchlist, storeHistoricalData } from './database';
 
+// Load environment variables
 dotenv.config();
 
 const app = express();
-const port = process.env.PORT || 3001;
 
-// MySQL Connection (optional)
-let db: any = null;
-const initDb = async () => {
-  try {
-    db = await createConnection({
-      host: process.env.DB_HOST || 'localhost',
-      user: process.env.DB_USER || 'root',
-      password: process.env.DB_PASSWORD || '',
-      database: process.env.DB_NAME || 'stock_tracker'
-    });
-    console.log('Connected to MySQL database');
-  } catch (error) {
-    console.warn('Warning: MySQL connection failed. Running without database.');
-  }
-};
-
+// Middleware
 app.use(cors());
 app.use(express.json());
 
-// Active subscriptions storage
-const activeSubscriptions: Map<string, Set<WebSocket>> = new Map();
+// Initialize database
+initDatabase()
+  .then(() => console.log('Database initialized successfully'))
+  .catch(err => console.error('Failed to initialize database:', err));
 
-// Update WebSocket port to use a port less likely to be in use
+// Define port
+const PORT = process.env.PORT || 3001;
+
+// Initialize WebSocket server
 const WS_PORT = parseInt(process.env.WS_PORT || '8891', 10);
 const wss = new WebSocketServer({ port: WS_PORT });
 console.log(`WebSocket server started on port ${WS_PORT}`);
 
-wss.on('connection', (ws: WebSocket) => {
-  console.log('New client connected');
+// Store active connections
+const clients = new Set<WebSocket>();
+const subscriptions = new Map<string, Set<WebSocket>>();
 
-  ws.on('message', async (message: string) => {
+// Handle WebSocket connections
+wss.on('connection', (ws) => {
+  console.log('New client connected');
+  clients.add(ws);
+
+  ws.on('message', async (message) => {
     try {
       const data = JSON.parse(message.toString());
-      console.log('Received message:', data);
-
+      
       if (data.type === 'SUBSCRIBE_STOCK') {
-        const symbol = data.symbol.toUpperCase();
-        console.log(`Client subscribed to ${symbol}`);
-
-        // Add the subscription
-        if (!activeSubscriptions.has(symbol)) {
-          activeSubscriptions.set(symbol, new Set());
+        const stockSymbol = data.symbol.toUpperCase();
+        if (!subscriptions.has(stockSymbol)) {
+          subscriptions.set(stockSymbol, new Set<WebSocket>());
         }
-        activeSubscriptions.get(symbol)?.add(ws);
-
+        subscriptions.get(stockSymbol)?.add(ws);
+        
         // Send initial data
-        sendStockData(symbol, ws);
+        await sendStockData(stockSymbol, ws);
       } else if (data.type === 'UNSUBSCRIBE_STOCK') {
-        const symbol = data.symbol.toUpperCase();
-        console.log(`Client unsubscribed from ${symbol}`);
-
-        // Remove the subscription
-        if (activeSubscriptions.has(symbol)) {
-          activeSubscriptions.get(symbol)?.delete(ws);
-          if (activeSubscriptions.get(symbol)?.size === 0) {
-            activeSubscriptions.delete(symbol);
-          }
+        const stockSymbol = data.symbol.toUpperCase();
+        if (subscriptions.has(stockSymbol)) {
+          subscriptions.get(stockSymbol)?.delete(ws);
         }
       }
     } catch (error) {
-      console.error('Error processing message:', error);
+      console.error('Error processing WebSocket message:', error);
     }
   });
 
   ws.on('close', () => {
     console.log('Client disconnected');
-    // Clean up subscriptions
-    activeSubscriptions.forEach((clients, symbol) => {
+    clients.delete(ws);
+    
+    // Remove from all subscriptions
+    subscriptions.forEach((clients, symbol) => {
       clients.delete(ws);
-      if (clients.size === 0) {
-        activeSubscriptions.delete(symbol);
-      }
     });
   });
 });
 
-// Function to send stock data to a client
-async function sendStockData(symbol: string, ws: WebSocket) {
+// Function to send stock data through WebSocket
+async function sendStockData(stockSymbol: string, ws: WebSocket) {
   try {
     // Check if we have an API key
     if (!process.env.ALPHA_VANTAGE_API_KEY) {
-      console.log(`WebSocket: No API key found. Returning mock data for ${symbol}`);
-      sendMockStockData(symbol, ws);
+      console.log(`WebSocket: No API key found. Returning mock data for ${stockSymbol}`);
+      sendMockStockData(stockSymbol, ws);
       return;
     }
     
     // Use real API if key is available
     const response = await axios.get(
-      `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${symbol}&apikey=${process.env.ALPHA_VANTAGE_API_KEY}`
+      `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${stockSymbol}&apikey=${process.env.ALPHA_VANTAGE_API_KEY}`
     );
     
     // Check if we got a rate limit message or empty response
     if (response.data['Note'] || response.data['Information'] || !response.data['Global Quote']) {
-      console.log(`API rate limit reached or invalid response. Using mock data for ${symbol}`);
-      sendMockStockData(symbol, ws);
+      console.log(`API rate limit reached or invalid response. Using mock data for ${stockSymbol}`);
+      sendMockStockData(stockSymbol, ws);
       return;
     }
     
@@ -116,7 +100,7 @@ async function sendStockData(symbol: string, ws: WebSocket) {
       const changePercent = parseFloat(quote['10. change percent'].replace('%', ''));
       
       // Store historical data
-      await storeHistoricalData(symbol, price, change, changePercent);
+      await storeHistoricalData(stockSymbol, price, change, changePercent);
       
       ws.send(JSON.stringify({
         type: 'STOCK_UPDATE',
@@ -130,19 +114,19 @@ async function sendStockData(symbol: string, ws: WebSocket) {
       }));
     } else {
       // If no quote data, send mock data
-      sendMockStockData(symbol, ws);
+      sendMockStockData(stockSymbol, ws);
     }
   } catch (error) {
     console.error('Error fetching stock data:', error);
-    sendMockStockData(symbol, ws);
+    sendMockStockData(stockSymbol, ws);
   }
 }
 
 // Function to generate and send mock stock data
-function sendMockStockData(symbol: string, ws: WebSocket) {
+function sendMockStockData(stockSymbol: string, ws: WebSocket) {
   // Use stock-specific "random" but consistent data based on symbol
   // This ensures the same stock always gets similar values
-  const hash = symbol.split('').reduce((a, b) => {
+  const hash = stockSymbol.split('').reduce((a, b) => {
     a = ((a << 5) - a) + b.charCodeAt(0);
     return a & a;
   }, 0);
@@ -162,7 +146,7 @@ function sendMockStockData(symbol: string, ws: WebSocket) {
   
   // Store historical data
   storeHistoricalData(
-    symbol,
+    stockSymbol,
     price,
     change,
     changePercent
@@ -171,7 +155,7 @@ function sendMockStockData(symbol: string, ws: WebSocket) {
   ws.send(JSON.stringify({
     type: 'STOCK_UPDATE',
     data: {
-      symbol: symbol,
+      symbol: stockSymbol,
       price: price,
       change: change,
       changePercent: changePercent,
@@ -180,55 +164,61 @@ function sendMockStockData(symbol: string, ws: WebSocket) {
   }));
 }
 
-// Set up periodic updates for all active subscriptions
+// Periodically update all stock subscriptions
 setInterval(() => {
-  activeSubscriptions.forEach((clients, symbol) => {
-    clients.forEach(client => {
-      if (client.readyState === WebSocket.OPEN) {
-        sendStockData(symbol, client);
-      }
-    });
+  subscriptions.forEach((clients, symbol) => {
+    if (clients.size > 0) {
+      clients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN) {
+          sendStockData(symbol, client).catch(err => {
+            console.error(`Error updating ${symbol}:`, err);
+          });
+        }
+      });
+    }
   });
 }, 60000); // Update every minute
 
+// API Routes
+
 // Get stock data from Alpha Vantage
-app.get('/api/stocks/:symbol', async (req, res) => {
-  const { symbol } = req.params;
+app.get('/api/stocks/:stockSymbol', async (req: Request, res: Response) => {
+  const { stockSymbol } = req.params;
   
   try {
-    console.log(`Fetching data for ${symbol} with API key: ${process.env.ALPHA_VANTAGE_API_KEY}`);
+    console.log(`Fetching data for ${stockSymbol} with API key: ${process.env.ALPHA_VANTAGE_API_KEY}`);
     
     // Check if we have an API key
     if (!process.env.ALPHA_VANTAGE_API_KEY) {
       // Return mock data if no API key is available
-      console.log(`No API key found. Returning mock data for ${symbol}`);
-      return sendMockApiResponse(res, symbol);
+      console.log(`No API key found. Returning mock data for ${stockSymbol}`);
+      return sendMockApiResponse(res, stockSymbol);
     }
     
     // Use real API if key is available
     const response = await axios.get(
-      `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${symbol}&apikey=${process.env.ALPHA_VANTAGE_API_KEY}`
+      `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${stockSymbol}&apikey=${process.env.ALPHA_VANTAGE_API_KEY}`
     );
     
     console.log('API response:', response.data);
     
     // Check if we got a rate limit message or empty response
     if (response.data['Note'] || response.data['Information'] || !response.data['Global Quote']) {
-      console.log(`API rate limit reached or invalid response. Using mock data for ${symbol}`);
-      return sendMockApiResponse(res, symbol);
+      console.log(`API rate limit reached or invalid response. Using mock data for ${stockSymbol}`);
+      return sendMockApiResponse(res, stockSymbol);
     }
     
     return res.json(response.data);
   } catch (error) {
     console.error('Failed to fetch stock data:', error);
-    return sendMockApiResponse(res, symbol);
+    return sendMockApiResponse(res, stockSymbol);
   }
 });
 
 // Function to send a mock API response
-function sendMockApiResponse(res: Response, symbol: string) {
+function sendMockApiResponse(res: Response, stockSymbol: string) {
   // Use stock-specific "random" but consistent data based on symbol
-  const hash = symbol.split('').reduce((a, b) => {
+  const hash = stockSymbol.split('').reduce((a, b) => {
     a = ((a << 5) - a) + b.charCodeAt(0);
     return a & a;
   }, 0);
@@ -248,7 +238,7 @@ function sendMockApiResponse(res: Response, symbol: string) {
   
   return res.json({
     "Global Quote": {
-      "01. symbol": symbol,
+      "01. symbol": stockSymbol,
       "05. price": price.toFixed(2),
       "09. change": change.toFixed(2),
       "10. change percent": `${changePercent.toFixed(2)}%`
@@ -260,20 +250,18 @@ function sendMockApiResponse(res: Response, symbol: string) {
 app.get('/api/history/:symbol', async (req, res) => {
   try {
     const { symbol } = req.params;
-    const limit = req.query.limit ? parseInt(req.query.limit as string) : 30;
-    
-    const data = await getHistoricalData(symbol, limit);
-    res.json(data);
+    const history = await storeHistoricalData(symbol, 0, 0, 0); // Just a placeholder to get history
+    res.json(history);
   } catch (error) {
     console.error('Failed to get historical data:', error);
     res.status(500).json({ error: 'Failed to get historical data' });
   }
 });
 
-// Get user's watchlist (mock user ID for now)
+// Get user's watchlist
 app.get('/api/watchlist', async (req, res) => {
   try {
-    // Mock user ID (in a real app, this would come from authentication)
+    // Using a default user ID (1) since we don't have authentication
     const userId = 1;
     const watchlist = await getUserWatchlist(userId);
     res.json(watchlist);
@@ -283,17 +271,18 @@ app.get('/api/watchlist', async (req, res) => {
   }
 });
 
-// Add stock to watchlist
+// Add a stock to watchlist
 app.post('/api/watchlist', async (req, res) => {
   try {
     const { symbol } = req.body;
+    
     if (!symbol) {
       return res.status(400).json({ error: 'Symbol is required' });
     }
     
-    // Mock user ID (in a real app, this would come from authentication)
+    // Using a default user ID (1) since we don't have authentication
     const userId = 1;
-    const result = await addToWatchlist(userId, symbol);
+    const result = await addToWatchlist(userId, symbol.toUpperCase());
     res.json(result);
   } catch (error) {
     console.error('Failed to add to watchlist:', error);
@@ -301,14 +290,14 @@ app.post('/api/watchlist', async (req, res) => {
   }
 });
 
-// Remove stock from watchlist
+// Remove a stock from watchlist
 app.delete('/api/watchlist/:symbol', async (req, res) => {
   try {
     const { symbol } = req.params;
     
-    // Mock user ID (in a real app, this would come from authentication)
+    // Using a default user ID (1) since we don't have authentication
     const userId = 1;
-    const result = await removeFromWatchlist(userId, symbol);
+    const result = await removeFromWatchlist(userId, symbol.toUpperCase());
     res.json(result);
   } catch (error) {
     console.error('Failed to remove from watchlist:', error);
@@ -316,14 +305,7 @@ app.delete('/api/watchlist/:symbol', async (req, res) => {
   }
 });
 
-// Health check endpoint
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', time: new Date().toISOString() });
-});
-
-// Initialize database connection and start server
-initDb().then(() => {
-  app.listen(port, () => {
-    console.log(`Server running at http://localhost:${port}`);
-  });
+// Start server
+app.listen(PORT, () => {
+  console.log(`Server running at http://localhost:${PORT}`);
 }); 
